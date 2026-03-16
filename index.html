@@ -1123,12 +1123,25 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;heigh
   <div style="padding:16px 16px 12px;border-bottom:1px solid var(--b1)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
       <div style="display:flex;align-items:center;gap:8px">
-        <div style="width:8px;height:8px;border-radius:50%;background:var(--green)"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:var(--green)" id="ai-status-dot"></div>
         <span style="font-size:13px;font-weight:500;color:var(--t1)">AI assistant</span>
       </div>
       <button class="btn-icon" onclick="toggleAISidebar()" style="font-size:18px" title="Hide">‹</button>
     </div>
     <p style="font-size:11px;color:var(--t3)">Powered by Claude · knows your planner data</p>
+    <!-- API Key setup -->
+    <div id="ai-key-setup" style="margin-top:10px;display:none">
+      <div style="font-size:11px;color:var(--amber);margin-bottom:6px">⚠️ Add your Gemini API key to enable AI</div>
+      <div style="display:flex;gap:6px">
+        <input type="password" id="ai-api-key-input" placeholder="AIza..." style="flex:1;font-size:11px;padding:4px 8px">
+        <button class="btn btn-sm btn-primary" onclick="saveApiKey()" style="font-size:11px">Save</button>
+      </div>
+      <div style="font-size:10px;color:var(--t3);margin-top:4px">Stored locally in your browser only · <a href="https://aistudio.google.com" target="_blank" style="color:var(--blue)">Get a free key ↗</a></div>
+    </div>
+    <div id="ai-key-set" style="margin-top:8px;display:none;font-size:11px;color:var(--green);display:flex;align-items:center;justify-content:space-between">
+      <span>✓ API key set</span>
+      <button class="btn-icon" onclick="clearApiKey()" style="font-size:10px;color:var(--t3)">Change</button>
+    </div>
   </div>
   <!-- Quick prompts -->
   <div style="padding:12px 16px;border-bottom:1px solid var(--b1);display:flex;flex-wrap:wrap;gap:6px">
@@ -2711,14 +2724,9 @@ async function getAIComfort(elId,mood){
   if(!wrap)return;
   wrap.innerHTML='<span style="color:var(--t3)">Finding the right words...</span>';
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:100,messages:[{role:'user',content:`The user feels "${mood}". Write ONE warm, gentle sentence (max 18 words) to acknowledge this and remind them they are enough. No advice, just warmth. English.`}]})
-    });
-    const data=await res.json();
-    const text=data.content&&data.content[0]?data.content[0].text:'You are doing the best you can, and that is always enough. 💚';
+    const text=await callAI(`The user feels "${mood}". Write ONE warm, gentle sentence (max 18 words) to acknowledge this and remind them they are enough. No advice, just warmth. English.`,null,80);
     wrap.style.cssText='border-radius:var(--r);padding:12px;font-size:14px;color:var(--t1);line-height:1.7;font-style:italic;background:var(--s1)';
-    wrap.textContent='"'+text.replace(/^"|"$/g,'')+'"';
+    wrap.textContent='"'+text.replace(/^"|"$/g,'').trim()+'"';
   }catch(e){
     wrap.textContent='You are doing the best you can, and that is always enough. 💚';
     wrap.style.fontStyle='italic';
@@ -3638,21 +3646,52 @@ Suggest 4 recipe ideas they haven't tried recently. For each, give:
 Keep it warm, gentle, and practical. No calorie counts. Format as a simple list.`;
 
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:600,messages:[{role:'user',content:prompt}]})
-    });
-    const data=await res.json();
-    const text=data.content&&data.content[0]?data.content[0].text:'Sorry, could not get suggestions.';
+    const text=await callAI(prompt,null,600);
     resultsEl.innerHTML=text.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>').replace(/\n/g,'<br>');
   }catch(e){
-    resultsEl.innerHTML='<span style="color:var(--t3)">Connection error — please try again.</span>';
+    resultsEl.innerHTML='<span style="color:var(--t3)">Connection error — make sure your Gemini API key is set.</span>';
   }
   btn.disabled=false;btn.textContent='Get suggestions';
 }
 
 // ---- AI SIDEBAR ----
+// API Key management
+function saveApiKey(){
+  const val=document.getElementById('ai-api-key-input').value.trim();
+  if(!val){alert('Please enter a valid Anthropic API key (starts with sk-)');return;}
+  localStorage.setItem('gemini-api-key',val);
+  updateApiKeyUI();
+}
+function clearApiKey(){
+  localStorage.removeItem('gemini-api-key');
+  updateApiKeyUI();
+}
+function updateApiKeyUI(){
+  const hasKey=!!getApiKey();
+  const setupEl=document.getElementById('ai-key-setup');
+  const setEl=document.getElementById('ai-key-set');
+  const dot=document.getElementById('ai-status-dot');
+  if(setupEl)setupEl.style.display=hasKey?'none':'block';
+  if(setEl)setEl.style.display=hasKey?'flex':'none';
+  if(dot)dot.style.background=hasKey?'var(--green)':'var(--amber)';
+}
+function getApiKey(){return localStorage.getItem('gemini-api-key')||'';}
+async function callAI(prompt, systemPrompt, maxTokens){
+  const key=getApiKey();
+  if(!key)throw new Error('No API key');
+  const messages=[{role:'user',parts:[{text:(systemPrompt?systemPrompt+'\n\n':'')+prompt}]}];
+  const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      contents:messages,
+      generationConfig:{maxOutputTokens:maxTokens||1000}
+    })
+  });
+  const data=await res.json();
+  if(data.error)throw new Error(data.error.message);
+  return data.candidates[0].content.parts[0].text;
+}
 let aiSidebarVisible=true;
 let aiHistory=[];
 
@@ -3722,6 +3761,12 @@ function aiQuick(type){
 }
 
 async function sendAIMessage(){
+  if(!getApiKey()){
+    const setupEl=document.getElementById('ai-key-setup');
+    if(setupEl)setupEl.style.display='block';
+    document.getElementById('ai-input').placeholder='Add your API key above first...';
+    return;
+  }
   const input=document.getElementById('ai-input');
   const msg=input.value.trim();
   if(!msg)return;
@@ -3738,20 +3783,10 @@ async function sendAIMessage(){
 
   try{
     const systemPrompt=buildPlannerContext();
-    const messages=aiHistory.slice(-8); // keep last 8 for context
-
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:systemPrompt,
-        messages
-      })
-    });
-    const data=await res.json();
-    const reply=data.content&&data.content[0]?data.content[0].text:'Sorry, something went wrong. Please try again.';
+    // Build conversation as single prompt for Gemini
+    const historyText=aiHistory.slice(-6).map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.content}`).join('\n');
+    const fullPrompt=historyText?historyText+'\nUser: '+userMsg:userMsg;
+    const reply=await callAI(fullPrompt,systemPrompt,1000);
 
     // remove loading, add reply
     const loadEl=document.getElementById(loadingId);
@@ -3761,7 +3796,7 @@ async function sendAIMessage(){
   }catch(err){
     const loadEl=document.getElementById(loadingId);
     if(loadEl)loadEl.remove();
-    addAIMessage('Connection error — make sure you\'re running this from a hosted URL (not a local file).','ai');
+    addAIMessage('Connection error — make sure your Gemini API key is set in the sidebar above.','ai');
   }
   document.getElementById('ai-send-btn').disabled=false;
 }
@@ -3810,6 +3845,8 @@ document.getElementById('task-edit-modal').addEventListener('click',function(e){
 document.getElementById('sg-edit-modal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
 // Init Google Drive sync
 initGoogleDrive();
+// Init API key UI
+updateApiKeyUI();
 document.getElementById('ci-edit-modal').addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
 </script>
 </body>
