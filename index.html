@@ -3748,7 +3748,7 @@ function toggleAISidebar(){
 }
 
 function buildPlannerContext(){
-  const today=now.toISOString().slice(0,10);
+  const today=todayStr;
   const upcoming=ST.pipeline.filter(p=>p.deadline&&p.deadline>=today)
     .sort((a,b)=>a.deadline.localeCompare(b.deadline)).slice(0,8)
     .map(p=>`• ${p.title} (${p.type}, ${p.stage}) — due ${p.deadline}`).join('\n');
@@ -3827,9 +3827,10 @@ async function sendAIMessage(){
 
   try{
     const systemPrompt=buildPlannerContext();
-    // Build conversation as single prompt for Gemini
-    const historyText=aiHistory.slice(-6).map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.content}`).join('\n');
-    const fullPrompt=historyText?historyText+'\nUser: '+userMsg:userMsg;
+    // Build history excluding error messages, use last 4 exchanges
+    const cleanHistory=aiHistory.filter(m=>!m.content.startsWith('⚠️')).slice(-8);
+    const historyText=cleanHistory.slice(0,-1).map(m=>`${m.role==='user'?'User':'Assistant'}: ${m.content}`).join('\n');
+    const fullPrompt=(historyText?historyText+'\n':'')+'User: '+msg+'\nAssistant:';
     const reply=await callAI(fullPrompt,systemPrompt,1000);
 
     // remove loading, add reply
