@@ -2230,6 +2230,39 @@ function renderTasks(){
 }
 
 // ---- PIPELINE ----
+let pipelineView='list';
+function setPipelineView(view){
+  pipelineView=view;
+  ['list','kanban','calendar'].forEach(v=>{
+    const panel=document.getElementById('pipeline-view-'+v);
+    const btn=document.getElementById('view-btn-'+v);
+    if(panel)panel.style.display=v===view?'block':'none';
+    if(btn){
+      if(v===view){btn.style.background='var(--s1)';btn.style.color='var(--t1)';btn.style.boxShadow='0 1px 2px rgba(0,0,0,0.06)';}
+      else{btn.style.background='transparent';btn.style.color='var(--t2)';btn.style.boxShadow='none';}
+    }
+  });
+  if(view==='kanban')renderKanban();
+  else if(view==='calendar')renderPipelineCalendar();
+  else renderPipeline();
+}
+function renderPipelineCalendar(){
+  const el=document.getElementById('pipeline-view-calendar');
+  if(!el)return;
+  const upcoming=[...ST.pipeline,...ST.subresearch].filter(p=>p.deadline).sort((a,b)=>a.deadline.localeCompare(b.deadline));
+  if(!upcoming.length){el.innerHTML='<p style="font-size:13px;color:var(--t3)">No items with deadlines.</p>';return;}
+  el.innerHTML=upcoming.map(p=>{
+    const diff=Math.ceil((new Date(p.deadline)-new Date(todayStr))/86400000);
+    const cls=dlClass(p.deadline);
+    return`<div class="pipeline-item ${cls}" style="margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-weight:500;font-size:13px">${p.title}</span>
+        <span style="font-size:11px;font-family:'DM Mono',monospace">${p.deadline}</span>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-top:3px">${diff<0?'Overdue by '+Math.abs(diff)+'d':diff===0?'Due today':'In '+diff+' days'}</div>
+    </div>`;
+  }).join('');
+}
 function updateStageOptions(){
   const type=document.getElementById('p-type').value;
   const opts=STAGE_OPTS[type]||['idea','draft','submitted','completed'];
@@ -3678,18 +3711,29 @@ function updateApiKeyUI(){
 function getApiKey(){return localStorage.getItem('gemini-api-key')||'';}
 async function callAI(prompt, systemPrompt, maxTokens){
   const key=getApiKey();
-  if(!key)throw new Error('No API key');
+  if(!key)throw new Error('No API key set');
   const messages=[{role:'user',parts:[{text:(systemPrompt?systemPrompt+'\n\n':'')+prompt}]}];
-  const res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      contents:messages,
-      generationConfig:{maxOutputTokens:maxTokens||1000}
-    })
-  });
+  let res;
+  try{
+    res=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        contents:messages,
+        generationConfig:{maxOutputTokens:maxTokens||1000}
+      })
+    });
+  }catch(e){
+    throw new Error('Network error — check your internet connection');
+  }
   const data=await res.json();
-  if(data.error)throw new Error(data.error.message);
+  if(data.error){
+    if(data.error.code===400)throw new Error('Invalid API key — please check and re-enter');
+    if(data.error.code===403)throw new Error('API not enabled — go to Google Cloud Console and enable "Generative Language API"');
+    if(data.error.code===429)throw new Error('Too many requests — please wait a moment');
+    throw new Error(data.error.message);
+  }
+  if(!data.candidates||!data.candidates[0])throw new Error('No response from Gemini');
   return data.candidates[0].content.parts[0].text;
 }
 let aiSidebarVisible=true;
@@ -3796,7 +3840,7 @@ async function sendAIMessage(){
   }catch(err){
     const loadEl=document.getElementById(loadingId);
     if(loadEl)loadEl.remove();
-    addAIMessage('Connection error — make sure your Gemini API key is set in the sidebar above.','ai');
+    addAIMessage('⚠️ '+err.message,'ai');
   }
   document.getElementById('ai-send-btn').disabled=false;
 }
